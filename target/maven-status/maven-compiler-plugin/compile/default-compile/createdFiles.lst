@@ -1,0 +1,4 @@
+com\github\minemaniauk\velocity\minemaniavelocity\MineManiaVelocity.class
+velocity-plugin.json
+com\github\minemaniauk\velocity\minemaniavelocity\DatabaseConnection.class
+com\github\minemaniauk\velocity\minemaniavelocity\VelocityLocationConverter.class
