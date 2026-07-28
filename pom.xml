@@ -6,7 +6,7 @@
 
     <groupId>com.github.minemaniauk.Velocity</groupId>
     <artifactId>MineManiaVelocity</artifactId>
-    <version>1.0</version>
+    <version>2.0</version>
     <packaging>jar</packaging>
 
     <name>MineMania Velocity</name>
@@ -186,11 +186,19 @@
             <version>4.0.0</version>
             <scope>provided</scope>
         </dependency>
+
         <dependency>
-            <groupId>com.github.MineManiaUK</groupId>
-            <artifactId>MineManiaAPI</artifactId>
-            <version>2.15.0</version>
+            <groupId>com.github.Smuddgge</groupId>
+            <artifactId>SquishyDatabase</artifactId>
+            <version>4.4.0</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.github.Smuddgge</groupId>
+                    <artifactId>SquishyConfiguration</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
+
         <!-- Protocolize -->
         <dependency>
             <groupId>dev.simplix</groupId>
@@ -210,6 +218,12 @@
             <groupId>net.dv8tion</groupId>
             <artifactId>JDA</artifactId>
             <version>5.0.0-beta.14</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.github.EngineHub</groupId>
+            <artifactId>SquirrelID</artifactId>
+            <version>0.3.0</version>
         </dependency>
     </dependencies>
 </project>

@@ -1,0 +1,9 @@
+enabled: false
+
+suggest-webhook:
+  enabled: false
+  url: ""
+
+report-webhook:
+  enabled: false
+  url: ""
