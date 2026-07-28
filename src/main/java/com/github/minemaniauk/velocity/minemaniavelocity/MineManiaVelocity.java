@@ -1,11 +1,14 @@
 package com.github.minemaniauk.velocity.minemaniavelocity;
 
+import com.github.minemaniauk.velocity.minemaniavelocity.commands.GwhitelistCommand;
 import com.github.minemaniauk.velocity.minemaniavelocity.commands.ReportCommand;
 import com.github.minemaniauk.velocity.minemaniavelocity.commands.SuggestCommand;
 import com.github.smuddgge.squishyconfiguration.ConfigurationFactory;
 import com.github.smuddgge.squishyconfiguration.interfaces.Configuration;
 import com.google.inject.Inject;
 import com.velocitypowered.api.command.CommandManager;
+import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
@@ -25,9 +28,11 @@ import java.nio.file.Path;
 )
 public class MineManiaVelocity {
 
+    private static final MinecraftProfileService profileService = new MinecraftProfileService();
     private static MineManiaVelocity instance;
     private final Configuration config;
     private final Configuration discordConfig;
+    private final WhitelistManager whitelistManager;
 
     private DiscordWebhookManager discordWebhookManager;
 
@@ -54,9 +59,16 @@ public class MineManiaVelocity {
             this.discordWebhookManager = new DiscordWebhookManager(discordConfig);
         }
 
+        whitelistManager = new WhitelistManager(dataDirectory.toFile());
         CommandManager cm = this.proxyServer.getCommandManager();
         cm.register(cm.metaBuilder("report").build(), new ReportCommand());
         cm.register(cm.metaBuilder("suggest").build(), new SuggestCommand());
+        cm.register(cm.metaBuilder("gwhitelist").build(), new GwhitelistCommand(profileService));
+    }
+
+    @Subscribe
+    public void onProxyInit(ProxyInitializeEvent event) {
+        proxyServer.getEventManager().register(this, whitelistManager);
     }
 
     public Logger getLogger(){
@@ -72,6 +84,14 @@ public class MineManiaVelocity {
     }
 
     public Configuration getConfig() { return this.config; }
+
+    public WhitelistManager getWhitelistManager() {
+        return this.whitelistManager;
+    }
+
+    public static MinecraftProfileService getProfileService() {
+        return profileService;
+    }
 
     public static MineManiaVelocity getInstance(){
         return instance;

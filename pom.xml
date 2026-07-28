@@ -220,10 +220,5 @@
             <version>5.0.0-beta.14</version>
         </dependency>
 
-        <dependency>
-            <groupId>com.github.EngineHub</groupId>
-            <artifactId>SquirrelID</artifactId>
-            <version>0.3.0</version>
-        </dependency>
     </dependencies>
 </project>
