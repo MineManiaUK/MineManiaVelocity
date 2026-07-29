@@ -1,125 +1,116 @@
 package com.github.minemaniauk.velocity.minemaniavelocity;
 
-import com.github.minemaniauk.api.MineManiaAPI;
-import com.github.minemaniauk.api.MineManiaAPIContract;
-import com.github.minemaniauk.api.kerb.event.player.PlayerChatEvent;
-import com.github.minemaniauk.api.kerb.event.useraction.*;
-import com.github.minemaniauk.api.user.MineManiaUser;
-import com.github.squishylib.configuration.Configuration;
-import com.github.squishylib.configuration.ConfigurationFactory;
-import com.github.squishylib.configuration.ConfigurationSection;
+import com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfileService.MinecraftProfileService;
+import com.github.minemaniauk.velocity.minemaniavelocity.commands.*;
+import com.github.smuddgge.squishyconfiguration.ConfigurationFactory;
+import com.github.smuddgge.squishyconfiguration.interfaces.Configuration;
 import com.google.inject.Inject;
-import com.mongodb.client.MongoDatabase;
-import com.mongodb.client.model.ReplaceOptions;
-import com.mongodb.client.model.UpdateOptions;
-import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.command.CommandManager;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
-import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
-import org.bson.Document;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 @Plugin(
         id = "minemaniavelocity",
         name = "MineMania Velocity",
-        version = "1.0",
-        authors = { "MineMania Devlopment Team", "Computerwhz" },
+        version = "2.0.0",
+        authors = { "MineMania Development Team", "Computerwhz" },
         url = "minemania.co"
 
 )
-public class MineManiaVelocity implements MineManiaAPIContract {
+public class MineManiaVelocity {
 
+    private static final MinecraftProfileService profileService = new MinecraftProfileService();
     private static MineManiaVelocity instance;
-    private final @NotNull Configuration config;
+    private final Configuration config;
+    private final Configuration discordConfig;
+    private final Configuration serverConfig;
+    private final WhitelistManager whitelistManager;
 
+    private DiscordWebhookManager discordWebhookManager;
+
+    private List<ServerCommand> loadedServerCommands = new ArrayList<>();
     private final ProxyServer proxyServer;
     private final Logger logger;
 
     @Inject
     public MineManiaVelocity (ProxyServer proxyServer, @DataDirectory final Path dataDirectory, Logger logger){
+        instance = this;
         this.proxyServer = proxyServer;
         this.logger = logger;
-        instance = this;
 
         this.config = ConfigurationFactory.YAML
-                .create(dataDirectory.toFile(), "config.yml")
-                .setResourcePath("config.yml");
+                .create(dataDirectory.toFile(), "config")
+                .setDefaultPath("config.yml");
         this.config.load();
 
+        this.discordConfig = ConfigurationFactory.YAML
+                .create(dataDirectory.toFile(), "discord")
+                .setDefaultPath("discord.yml");
+        this.discordConfig.load();
 
-        DatabaseConnection.Connect(config.getString("database.connection_string"), config.getString("database.database_name") );
+        this.serverConfig = ConfigurationFactory.YAML
+                .create(dataDirectory.toFile(), "servers")
+                .setDefaultPath("servers.yml");
+        this.serverConfig.load();
 
-        ConfigurationSection menuServers = config.getSection("menu");
+        if (discordConfig.getBoolean("enabled")) {
+            this.discordWebhookManager = new DiscordWebhookManager(discordConfig);
+        }
 
-        getDataBase()
-                .getCollection("MenuServers")
-                .updateOne(
-                        new Document("_id", "Menu_Servers"),
-                        new Document("$set", new Document("menu", new Document(menuServers.getMap()))),
-                        new UpdateOptions().upsert(true) // creates if doesn't exist
-                );
-
+        whitelistManager = new WhitelistManager(dataDirectory.toFile());
+        CommandManager cm = this.proxyServer.getCommandManager();
+        cm.register(cm.metaBuilder("report").build(), new ReportCommand());
+        cm.register(cm.metaBuilder("suggest").build(), new SuggestCommand());
+        cm.register(cm.metaBuilder("gwhitelist").build(), new GwhitelistCommand(profileService));
+        cm.register(cm.metaBuilder("reloadservers").build(), new ReloadServerCommands());
+        loadServerCommands();
     }
 
-    @Override
-    public @NotNull MineManiaUser getUser(@NotNull UUID uuid) {
-        return new MineManiaUser(uuid, this.proxyServer.getPlayer(uuid).orElseThrow().getUsername());
+    @Subscribe
+    public void onProxyInit(ProxyInitializeEvent event) {
+        proxyServer.getEventManager().register(this, whitelistManager);
     }
 
-    @Override
-    public @NotNull MineManiaUser getUser(@NotNull String name) {
-        return new MineManiaUser(this.proxyServer.getPlayer(name).orElseThrow().getUniqueId(), name);
-    }
-    @Override
-    public @Nullable UserActionHasPermissionListEvent onHasPermission(@NotNull UserActionHasPermissionListEvent event) {
-        return null;
-    }
+    public boolean loadServerCommands() {
+        CommandManager cm = proxyServer.getCommandManager();
+        serverConfig.load();
+        unregisterServerCommands();
 
-    @Override
-    public @Nullable UserActionIsOnlineEvent onIsOnline(@NotNull UserActionIsOnlineEvent event) {
-        return null;
-    }
+        for (String key : serverConfig.getKeys()) {
+            Optional<RegisteredServer> optionalServer = proxyServer.getServer(key);
+            if (optionalServer.isEmpty()) {
+                logger.error("Server %s does not exist".formatted(key));
+                unregisterServerCommands();
+                return false;
+            }
 
-    @Override
-    public @Nullable UserActionIsVanishedEvent onIsVanished(@NotNull UserActionIsVanishedEvent event) {
-        return null;
-    }
-
-    @Override
-    public @Nullable UserActionTeleportEvent onTeleport(@NotNull UserActionTeleportEvent event) {
-        this.getPlayer(event.getUser()).ifPresent(user -> {
-            RegisteredServer registeredServer = event.getLocation().getLocation(new VelocityLocationConverter());
-            user.createConnectionRequest(registeredServer).connect();
-        });
-        return (UserActionTeleportEvent) event.setComplete(true);
+            String name = serverConfig.getString(key);
+            RegisteredServer server = optionalServer.get();
+            loadedServerCommands.add(new ServerCommand(name, server, cm));
+            logger.info("Successfully registered new server command %s pointing to %s".formatted(name, server.getServerInfo().getName()));
+        }
+        return true;
     }
 
-    public @NotNull Optional<Player> getPlayer(@NotNull MineManiaUser user) {
-        return getInstance().getProxyServer().getPlayer(user.getUniqueId());
-    }
-
-    @Override
-    public @NotNull PlayerChatEvent onChatEvent(@NotNull PlayerChatEvent event) {
-        return null;
-    }
-
-
-    @Override
-    public @Nullable UserActionMessageEvent onMessage(@NotNull UserActionMessageEvent event) {
-        return null;
-    }
-
-    public MongoDatabase getDataBase(){
-        return DatabaseConnection.getMongoDatabase();
+    public void unregisterServerCommands() {
+        for (ServerCommand command : loadedServerCommands) {
+            String name = command.name;
+            String serverName = command.server.getServerInfo().getName();
+            command.unregister();
+            logger.info("Successfully unregistered server command %s pointing to %s".formatted(name, serverName));
+        }
+        loadedServerCommands.clear();
     }
 
     public Logger getLogger(){
@@ -128,6 +119,20 @@ public class MineManiaVelocity implements MineManiaAPIContract {
 
     public ProxyServer getProxyServer(){
         return this.proxyServer;
+    }
+
+    public DiscordWebhookManager getWebhookManager() {
+        return discordWebhookManager;
+    }
+
+    public Configuration getConfig() { return this.config; }
+
+    public WhitelistManager getWhitelistManager() {
+        return this.whitelistManager;
+    }
+
+    public static MinecraftProfileService getProfileService() {
+        return profileService;
     }
 
     public static MineManiaVelocity getInstance(){
