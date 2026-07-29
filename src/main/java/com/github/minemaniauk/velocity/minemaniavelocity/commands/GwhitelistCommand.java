@@ -1,7 +1,7 @@
 package com.github.minemaniauk.velocity.minemaniavelocity.commands;
 
-import com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfile;
-import com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfileService;
+import com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfileService.MinecraftProfile;
+import com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfileService.MinecraftProfileService;
 import com.github.minemaniauk.velocity.minemaniavelocity.MineManiaVelocity;
 import com.velocitypowered.api.command.SimpleCommand;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;

@@ -1,4 +1,4 @@
-package com.github.minemaniauk.velocity.minemaniavelocity;
+package com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfileService;
 
 import java.util.UUID;
 

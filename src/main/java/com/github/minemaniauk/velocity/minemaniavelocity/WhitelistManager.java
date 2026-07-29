@@ -1,5 +1,6 @@
 package com.github.minemaniauk.velocity.minemaniavelocity;
 
+import com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfileService.MinecraftProfile;
 import com.github.smuddgge.squishyconfiguration.ConfigurationFactory;
 import com.github.smuddgge.squishyconfiguration.interfaces.Configuration;
 import com.velocitypowered.api.event.ResultedEvent;

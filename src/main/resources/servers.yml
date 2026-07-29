@@ -1,0 +1,3 @@
+# To add a server command do this
+# Key <server name as in velocity.toml>:  Value <command as executed>
+# Example: hubserver: "hubcommand"
