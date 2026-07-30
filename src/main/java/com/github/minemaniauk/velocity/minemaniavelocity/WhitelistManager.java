@@ -1,8 +1,5 @@
 package com.github.minemaniauk.velocity.minemaniavelocity;
 
-import com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfileService.MinecraftProfile;
-import com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfileService.MinecraftProfileService;
-import com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfileService.MinecraftProfileService.RetryableProfileLookupException;
 import com.github.smuddgge.squishyconfiguration.ConfigurationFactory;
 import com.github.smuddgge.squishyconfiguration.interfaces.Configuration;
 import com.velocitypowered.api.event.ResultedEvent;
@@ -12,13 +9,12 @@ import com.velocitypowered.api.proxy.Player;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -26,15 +22,16 @@ public class WhitelistManager {
 
     private static final String WHITELIST_KEY = "whitelist";
     private static final String CACHED_NAMES_KEY = "cached-names";
+    private static final String PENDING_USERNAMES_KEY = "pending-usernames";
     private static final String NAME_CACHE_SEPARATOR = "=";
-    private static final long MIGRATION_REMOTE_LOOKUP_DELAY_MS = 150L;
 
     private List<String> loadedUuidList = new ArrayList<>();
     private Map<String, String> loadedNameCache = new LinkedHashMap<>();
+    private List<String> pendingUsernames = new ArrayList<>();
 
     private boolean enabled;
     private String message;
-    private Configuration whiteListConfig;
+    private final Configuration whiteListConfig;
 
     public WhitelistManager(File dataDirectory) {
         whiteListConfig = ConfigurationFactory.YAML
@@ -46,145 +43,165 @@ public class WhitelistManager {
     @Subscribe
     public void onPlayerJoin(LoginEvent event) {
         Player player = event.getPlayer();
-
-        if (isWhitelisted(player.getUniqueId())) {
-            rememberPlayerName(player.getUniqueId(), player.getUsername());
-        }
+        rememberJoiningPlayer(player.getUniqueId(), player.getUsername());
 
         if (!enabled) return;
 
-        if (!check(player)){
+        if (!check(player)) {
             event.setResult(ResultedEvent.ComponentResult.denied(LegacyComponentSerializer.legacyAmpersand().deserialize(message)));
         }
     }
 
-    public synchronized void add(UUID uuid, String playerName) {
-        String uuidString = uuid.toString();
-        if (!loadedUuidList.contains(uuidString)) {
-            List<String> newList = new ArrayList<>(loadedUuidList);
-            Map<String, String> newNameCache = new LinkedHashMap<>(loadedNameCache);
-            newList.add(uuidString);
-
-            if (isValidPlayerName(playerName)) {
-                newNameCache.put(uuidString, playerName);
-            }
-
-            saveWhitelist(newList, newNameCache);
+    public synchronized AddResult addPlayer(String playerName) {
+        String sanitisedPlayerName = sanitisePlayerName(playerName);
+        if (sanitisedPlayerName == null) {
+            return AddResult.INVALID_NAME;
         }
+
+        if (containsPendingUsername(sanitisedPlayerName)) {
+            return AddResult.ALREADY_PENDING;
+        }
+
+        if (isKnownWhitelistedName(sanitisedPlayerName)) {
+            return AddResult.ALREADY_WHITELISTED;
+        }
+
+        List<String> updatedPendingUsernames = new ArrayList<>(pendingUsernames);
+        updatedPendingUsernames.add(sanitisedPlayerName);
+        saveWhitelist(new ArrayList<>(loadedUuidList), new LinkedHashMap<>(loadedNameCache), updatedPendingUsernames);
+        return AddResult.ADDED_PENDING;
     }
 
-    public synchronized void remove(UUID uuid) {
-        String uuidString = uuid.toString();
-        if (loadedUuidList.contains(uuidString)) {
-            List<String> newList = new ArrayList<>(loadedUuidList);
-            Map<String, String> newNameCache = new LinkedHashMap<>(loadedNameCache);
-            newList.remove(uuidString);
-            newNameCache.remove(uuidString);
-            saveWhitelist(newList, newNameCache);
+    public synchronized RemoveResult removePlayer(String playerIdentifier) {
+        String sanitisedPlayerIdentifier = sanitisePlayerName(playerIdentifier);
+        if (sanitisedPlayerIdentifier == null) {
+            return RemoveResult.notFound();
         }
+
+        Optional<String> pendingMatch = findPendingUsername(sanitisedPlayerIdentifier);
+        if (pendingMatch.isPresent()) {
+            List<String> updatedPendingUsernames = new ArrayList<>(pendingUsernames);
+            updatedPendingUsernames.removeIf(entry -> entry.equalsIgnoreCase(sanitisedPlayerIdentifier));
+            saveWhitelist(new ArrayList<>(loadedUuidList), new LinkedHashMap<>(loadedNameCache), updatedPendingUsernames);
+            return RemoveResult.pending(pendingMatch.get());
+        }
+
+        Optional<String> uuidMatch = findWhitelistedUuidString(sanitisedPlayerIdentifier);
+        if (uuidMatch.isEmpty()) {
+            return RemoveResult.notFound();
+        }
+
+        String uuidString = uuidMatch.get();
+        String removedEntry = getDisplayName(uuidString);
+        List<String> updatedUuidList = new ArrayList<>(loadedUuidList);
+        Map<String, String> updatedNameCache = new LinkedHashMap<>(loadedNameCache);
+        updatedUuidList.remove(uuidString);
+        updatedNameCache.remove(uuidString);
+        saveWhitelist(updatedUuidList, updatedNameCache, new ArrayList<>(pendingUsernames));
+        return RemoveResult.whitelisted(removedEntry);
     }
 
     public synchronized List<String> getAllPlayers() {
-        if (loadedUuidList.isEmpty()) {
-            return List.of();
-        }
-
-        return loadedUuidList.stream()
+        List<String> allPlayers = new ArrayList<>();
+        loadedUuidList.stream()
                 .map(this::getDisplayName)
-                .toList();
+                .forEach(allPlayers::add);
+        pendingUsernames.stream()
+                .map(playerName -> playerName + " (pending)")
+                .forEach(allPlayers::add);
+        return List.copyOf(allPlayers);
     }
 
-    public synchronized List<String> getWhitelistedPlayerNames() {
-        return loadedUuidList.stream()
-                .map(this::getKnownPlayerName)
-                .filter(Objects::nonNull)
-                .distinct()
-                .toList();
+    public synchronized List<String> getRemovalSuggestions() {
+        LinkedHashSet<String> suggestions = new LinkedHashSet<>();
+        loadedUuidList.stream()
+                .map(this::getDisplayName)
+                .forEach(suggestions::add);
+        suggestions.addAll(pendingUsernames);
+        return List.copyOf(suggestions);
     }
 
     public synchronized void rememberPlayerName(UUID uuid, String playerName) {
-        if (!isWhitelisted(uuid) || !isValidPlayerName(playerName)) {
+        String sanitisedPlayerName = sanitisePlayerName(playerName);
+        if (!isWhitelisted(uuid) || sanitisedPlayerName == null) {
             return;
         }
 
         String uuidString = uuid.toString();
-        if (playerName.equals(loadedNameCache.get(uuidString))) {
+        if (sanitisedPlayerName.equals(loadedNameCache.get(uuidString))) {
             return;
         }
 
         Map<String, String> updatedNameCache = new LinkedHashMap<>(loadedNameCache);
-        updatedNameCache.put(uuidString, playerName);
-        saveWhitelist(new ArrayList<>(loadedUuidList), updatedNameCache);
+        updatedNameCache.put(uuidString, sanitisedPlayerName);
+        saveWhitelist(new ArrayList<>(loadedUuidList), updatedNameCache, new ArrayList<>(pendingUsernames));
     }
 
-    public synchronized int getMissingNameCount() {
-        return (int) loadedUuidList.stream()
-                .filter(uuidString -> !isValidPlayerName(loadedNameCache.get(uuidString)))
-                .count();
+    private synchronized void rememberJoiningPlayer(UUID uuid, String playerName) {
+        String sanitisedPlayerName = sanitisePlayerName(playerName);
+        if (sanitisedPlayerName == null) {
+            return;
+        }
+
+        String uuidString = uuid.toString();
+        boolean pendingMatch = containsPendingUsername(sanitisedPlayerName);
+        boolean alreadyWhitelisted = loadedUuidList.contains(uuidString);
+        boolean shouldAddUuid = pendingMatch && !alreadyWhitelisted;
+        boolean shouldUpdateName = (alreadyWhitelisted || shouldAddUuid) && !sanitisedPlayerName.equals(loadedNameCache.get(uuidString));
+
+        if (!pendingMatch && !shouldUpdateName) {
+            return;
+        }
+
+        List<String> updatedUuidList = new ArrayList<>(loadedUuidList);
+        Map<String, String> updatedNameCache = new LinkedHashMap<>(loadedNameCache);
+        List<String> updatedPendingUsernames = new ArrayList<>(pendingUsernames);
+
+        if (shouldAddUuid) {
+            updatedUuidList.add(uuidString);
+        }
+
+        if (pendingMatch) {
+            updatedPendingUsernames.removeIf(entry -> entry.equalsIgnoreCase(sanitisedPlayerName));
+        }
+
+        if (shouldUpdateName) {
+            updatedNameCache.put(uuidString, sanitisedPlayerName);
+        }
+
+        saveWhitelist(updatedUuidList, updatedNameCache, updatedPendingUsernames);
     }
 
-    public MigrationResult migrateCachedNames(MinecraftProfileService profileService) throws InterruptedException {
-        List<String> missingUuidStrings;
-        Map<String, String> updatedNameCache;
+    private boolean isKnownWhitelistedName(String playerName) {
+        return loadedUuidList.stream()
+                .map(this::getKnownPlayerName)
+                .anyMatch(knownPlayerName -> knownPlayerName != null && knownPlayerName.equalsIgnoreCase(playerName));
+    }
 
-        synchronized (this) {
-            missingUuidStrings = loadedUuidList.stream()
-                    .filter(uuidString -> !isValidPlayerName(loadedNameCache.get(uuidString)))
-                    .toList();
-            updatedNameCache = new LinkedHashMap<>(loadedNameCache);
+    private Optional<String> findPendingUsername(String playerName) {
+        return pendingUsernames.stream()
+                .filter(knownPendingName -> knownPendingName.equalsIgnoreCase(playerName))
+                .findFirst();
+    }
+
+    private boolean containsPendingUsername(String playerName) {
+        return findPendingUsername(playerName).isPresent();
+    }
+
+    private Optional<String> findWhitelistedUuidString(String playerIdentifier) {
+        Optional<String> directUuidMatch = loadedUuidList.stream()
+                .filter(uuidString -> uuidString.equalsIgnoreCase(playerIdentifier))
+                .findFirst();
+        if (directUuidMatch.isPresent()) {
+            return directUuidMatch;
         }
 
-        if (missingUuidStrings.isEmpty()) {
-            return new MigrationResult(0, 0, 0, false, false, null);
-        }
-
-        int migratedCount = 0;
-        int onlineResolvedCount = 0;
-        String failureMessage = null;
-        boolean retryableFailure = false;
-
-        for (String uuidString : missingUuidStrings) {
-            String playerName = getOnlinePlayerName(uuidString).orElse(null);
-
-            if (isValidPlayerName(playerName)) {
-                updatedNameCache.put(uuidString, playerName);
-                migratedCount++;
-                onlineResolvedCount++;
-                continue;
-            }
-
-            try {
-                MinecraftProfile profile = profileService.findByUuid(UUID.fromString(uuidString));
-                if (profile != null && isValidPlayerName(profile.getName())) {
-                    updatedNameCache.put(uuidString, profile.getName());
-                    migratedCount++;
-                }
-            } catch (IllegalArgumentException exception) {
-                failureMessage = "Invalid UUID in whitelist: " + uuidString;
-                break;
-            } catch (IOException exception) {
-                failureMessage = exception.getMessage();
-                retryableFailure = exception instanceof RetryableProfileLookupException;
-                break;
-            }
-
-            Thread.sleep(MIGRATION_REMOTE_LOOKUP_DELAY_MS);
-        }
-
-        synchronized (this) {
-            if (!updatedNameCache.equals(loadedNameCache)) {
-                saveWhitelist(new ArrayList<>(loadedUuidList), updatedNameCache);
-            }
-        }
-
-        return new MigrationResult(
-                missingUuidStrings.size(),
-                migratedCount,
-                onlineResolvedCount,
-                failureMessage != null,
-                retryableFailure,
-                failureMessage
-        );
+        return loadedUuidList.stream()
+                .filter(uuidString -> {
+                    String knownPlayerName = getKnownPlayerName(uuidString);
+                    return knownPlayerName != null && knownPlayerName.equalsIgnoreCase(playerIdentifier);
+                })
+                .findFirst();
     }
 
     private String getDisplayName(String uuidString) {
@@ -212,13 +229,16 @@ public class WhitelistManager {
         }
     }
 
-    private synchronized void saveWhitelist(List<String> uuidList, Map<String, String> nameCache) {
+    private synchronized void saveWhitelist(List<String> uuidList, Map<String, String> nameCache, List<String> pendingUsernames) {
         Map<String, String> mergedNameCache = new LinkedHashMap<>(loadedNameCache);
         mergedNameCache.putAll(nameCache);
         mergedNameCache.entrySet().removeIf(entry -> !uuidList.contains(entry.getKey()) || !isValidPlayerName(entry.getValue()));
 
+        List<String> normalisedPendingUsernames = normalisePendingUsernames(pendingUsernames, mergedNameCache);
+
         whiteListConfig.set(WHITELIST_KEY, uuidList);
         whiteListConfig.set(CACHED_NAMES_KEY, serialiseNameCache(uuidList, mergedNameCache));
+        whiteListConfig.set(PENDING_USERNAMES_KEY, normalisedPendingUsernames);
         whiteListConfig.save();
         reloadWhitelist();
     }
@@ -258,8 +278,61 @@ public class WhitelistManager {
         return parsedNameCache;
     }
 
+    private List<String> normalisePendingUsernames(List<String> rawPendingUsernames, Map<String, String> nameCache) {
+        List<String> normalisedPendingUsernames = new ArrayList<>();
+        if (rawPendingUsernames == null) {
+            return normalisedPendingUsernames;
+        }
+
+        for (String playerName : rawPendingUsernames) {
+            String sanitisedPlayerName = sanitisePlayerName(playerName);
+            if (sanitisedPlayerName == null) {
+                continue;
+            }
+
+            if (containsIgnoreCase(normalisedPendingUsernames, sanitisedPlayerName)) {
+                continue;
+            }
+
+            if (isCachedWhitelistedName(sanitisedPlayerName, nameCache)) {
+                continue;
+            }
+
+            normalisedPendingUsernames.add(sanitisedPlayerName);
+        }
+
+        return normalisedPendingUsernames;
+    }
+
+    private boolean isCachedWhitelistedName(String playerName, Map<String, String> nameCache) {
+        return nameCache.values().stream()
+                .anyMatch(cachedName -> cachedName != null && cachedName.equalsIgnoreCase(playerName));
+    }
+
+    private boolean containsIgnoreCase(List<String> values, String target) {
+        return values.stream().anyMatch(value -> value.equalsIgnoreCase(target));
+    }
+
+    private String sanitisePlayerName(String playerName) {
+        if (playerName == null) {
+            return null;
+        }
+
+        String sanitisedPlayerName = playerName.trim();
+        return sanitisedPlayerName.isBlank() ? null : sanitisedPlayerName;
+    }
+
     private boolean isValidPlayerName(String playerName) {
-        return playerName != null && !playerName.isBlank();
+        return sanitisePlayerName(playerName) != null;
+    }
+
+    private boolean isUuid(String value) {
+        try {
+            UUID.fromString(value);
+            return true;
+        } catch (IllegalArgumentException exception) {
+            return false;
+        }
     }
 
     public synchronized boolean check(Player player) {
@@ -275,10 +348,40 @@ public class WhitelistManager {
                 : configuredMessage;
 
         List<String> configuredWhitelist = whiteListConfig.getListString(WHITELIST_KEY);
-        loadedUuidList = configuredWhitelist == null
-                ? new ArrayList<>()
-                : new ArrayList<>(configuredWhitelist);
+        List<String> migratedPendingUsernames = new ArrayList<>();
+        boolean migratedLegacyNames = false;
+
+        loadedUuidList = new ArrayList<>();
+        if (configuredWhitelist != null) {
+            for (String whitelistEntry : configuredWhitelist) {
+                String sanitisedWhitelistEntry = sanitisePlayerName(whitelistEntry);
+                if (sanitisedWhitelistEntry == null) {
+                    continue;
+                }
+
+                if (isUuid(sanitisedWhitelistEntry)) {
+                    loadedUuidList.add(sanitisedWhitelistEntry);
+                    continue;
+                }
+
+                migratedPendingUsernames.add(sanitisedWhitelistEntry);
+                migratedLegacyNames = true;
+            }
+        }
+
         loadedNameCache = parseNameCache(whiteListConfig.getListString(CACHED_NAMES_KEY));
+        List<String> configuredPendingUsernames = whiteListConfig.getListString(PENDING_USERNAMES_KEY);
+        if (configuredPendingUsernames != null) {
+            migratedPendingUsernames.addAll(configuredPendingUsernames);
+        }
+        pendingUsernames = normalisePendingUsernames(migratedPendingUsernames, loadedNameCache);
+
+        if (migratedLegacyNames) {
+            whiteListConfig.set(WHITELIST_KEY, loadedUuidList);
+            whiteListConfig.set(CACHED_NAMES_KEY, serialiseNameCache(loadedUuidList, loadedNameCache));
+            whiteListConfig.set(PENDING_USERNAMES_KEY, pendingUsernames);
+            whiteListConfig.save();
+        }
     }
 
     public synchronized boolean isWhitelisted(UUID uuid) {
@@ -289,46 +392,47 @@ public class WhitelistManager {
         return Collections.unmodifiableList(loadedUuidList);
     }
 
-    public static final class MigrationResult {
+    public enum AddResult {
+        ADDED_PENDING,
+        ALREADY_PENDING,
+        ALREADY_WHITELISTED,
+        INVALID_NAME
+    }
 
-        private final int totalMissingCount;
-        private final int migratedCount;
-        private final int onlineResolvedCount;
-        private final boolean stoppedEarly;
-        private final boolean retryableFailure;
-        private final String failureMessage;
+    public static final class RemoveResult {
 
-        public MigrationResult(int totalMissingCount, int migratedCount, int onlineResolvedCount, boolean stoppedEarly, boolean retryableFailure, String failureMessage) {
-            this.totalMissingCount = totalMissingCount;
-            this.migratedCount = migratedCount;
-            this.onlineResolvedCount = onlineResolvedCount;
-            this.stoppedEarly = stoppedEarly;
-            this.retryableFailure = retryableFailure;
-            this.failureMessage = failureMessage;
+        private final boolean removed;
+        private final boolean pending;
+        private final String displayName;
+
+        private RemoveResult(boolean removed, boolean pending, String displayName) {
+            this.removed = removed;
+            this.pending = pending;
+            this.displayName = displayName;
         }
 
-        public int getTotalMissingCount() {
-            return totalMissingCount;
+        public static RemoveResult notFound() {
+            return new RemoveResult(false, false, null);
         }
 
-        public int getMigratedCount() {
-            return migratedCount;
+        public static RemoveResult pending(String displayName) {
+            return new RemoveResult(true, true, displayName);
         }
 
-        public int getOnlineResolvedCount() {
-            return onlineResolvedCount;
+        public static RemoveResult whitelisted(String displayName) {
+            return new RemoveResult(true, false, displayName);
         }
 
-        public boolean isStoppedEarly() {
-            return stoppedEarly;
+        public boolean wasRemoved() {
+            return removed;
         }
 
-        public boolean isRetryableFailure() {
-            return retryableFailure;
+        public boolean wasPending() {
+            return pending;
         }
 
-        public String getFailureMessage() {
-            return failureMessage;
+        public String getDisplayName() {
+            return displayName;
         }
     }
 }

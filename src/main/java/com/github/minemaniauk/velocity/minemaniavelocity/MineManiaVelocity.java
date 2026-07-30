@@ -1,7 +1,5 @@
 package com.github.minemaniauk.velocity.minemaniavelocity;
 
-import com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfileService.MinecraftProfileService;
-import com.github.minemaniauk.velocity.minemaniavelocity.WhitelistManager.MigrationResult;
 import com.github.minemaniauk.velocity.minemaniavelocity.commands.*;
 import com.github.smuddgge.squishyconfiguration.ConfigurationFactory;
 import com.github.smuddgge.squishyconfiguration.interfaces.Configuration;
@@ -13,11 +11,9 @@ import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
-import com.velocitypowered.api.scheduler.ScheduledTask;
 import org.slf4j.Logger;
 
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -32,8 +28,6 @@ import java.util.Optional;
 )
 public class MineManiaVelocity {
 
-    private static final Duration WHITELIST_MIGRATION_RETRY_DELAY = Duration.ofMinutes(1);
-    private static final MinecraftProfileService profileService = new MinecraftProfileService();
     private static MineManiaVelocity instance;
     private final Configuration config;
     private final Configuration discordConfig;
@@ -43,8 +37,6 @@ public class MineManiaVelocity {
     private DiscordWebhookManager discordWebhookManager;
 
     private List<ServerCommand> loadedServerCommands = new ArrayList<>();
-    private ScheduledTask whitelistMigrationTask;
-    private boolean whitelistMigrationActive;
     private final ProxyServer proxyServer;
     private final Logger logger;
 
@@ -77,7 +69,7 @@ public class MineManiaVelocity {
         CommandManager cm = this.proxyServer.getCommandManager();
         cm.register(cm.metaBuilder("report").build(), new ReportCommand());
         cm.register(cm.metaBuilder("suggest").build(), new SuggestCommand());
-        cm.register(cm.metaBuilder("gwhitelist").build(), new GwhitelistCommand(profileService));
+        cm.register(cm.metaBuilder("gwhitelist").build(), new GwhitelistCommand());
         cm.register(cm.metaBuilder("reloadservers").build(), new ReloadServerCommands());
         loadServerCommands();
     }
@@ -118,94 +110,6 @@ public class MineManiaVelocity {
         loadedServerCommands.clear();
     }
 
-    public synchronized WhitelistMigrationStartResult startWhitelistMigration() {
-        if (whitelistManager.getMissingNameCount() == 0) {
-            return WhitelistMigrationStartResult.NOTHING_TO_MIGRATE;
-        }
-
-        if (whitelistMigrationActive) {
-            return WhitelistMigrationStartResult.ALREADY_RUNNING;
-        }
-
-        whitelistMigrationActive = true;
-        scheduleWhitelistMigration(Duration.ZERO);
-        logger.info("Started background whitelist name migration.");
-        return WhitelistMigrationStartResult.STARTED;
-    }
-
-    private void runWhitelistMigration() {
-        MigrationResult result;
-
-        try {
-            result = whitelistManager.migrateCachedNames(profileService);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            logger.warn("Whitelist name migration was interrupted.");
-            finishWhitelistMigration();
-            return;
-        }
-
-        if (result.getTotalMissingCount() == 0) {
-            logger.info("Whitelist name migration found nothing to do.");
-            finishWhitelistMigration();
-            return;
-        }
-
-        if (result.isStoppedEarly()) {
-            if (result.isRetryableFailure()) {
-                logger.warn(
-                        "Whitelist name migration migrated {}/{} names before a retryable failure: {}. Retrying in {} seconds.",
-                        result.getMigratedCount(),
-                        result.getTotalMissingCount(),
-                        result.getFailureMessage(),
-                        WHITELIST_MIGRATION_RETRY_DELAY.toSeconds()
-                );
-                scheduleWhitelistMigration(WHITELIST_MIGRATION_RETRY_DELAY);
-                return;
-            }
-
-            logger.error(
-                    "Whitelist name migration stopped after migrating {}/{} names: {}",
-                    result.getMigratedCount(),
-                    result.getTotalMissingCount(),
-                    result.getFailureMessage()
-            );
-            finishWhitelistMigration();
-            return;
-        }
-
-        int remainingNames = whitelistManager.getMissingNameCount();
-        if (remainingNames > 0) {
-            logger.info(
-                    "Whitelist name migration resolved {}/{} names. {} entries still have no known name.",
-                    result.getMigratedCount(),
-                    result.getTotalMissingCount(),
-                    remainingNames
-            );
-        } else {
-            logger.info(
-                    "Whitelist name migration resolved all {} missing names. {} came from online players.",
-                    result.getMigratedCount(),
-                    result.getOnlineResolvedCount()
-            );
-        }
-
-        finishWhitelistMigration();
-    }
-
-    private synchronized void scheduleWhitelistMigration(Duration delay) {
-        var taskBuilder = proxyServer.getScheduler().buildTask(this, this::runWhitelistMigration);
-        if (!delay.isZero()) {
-            taskBuilder.delay(delay);
-        }
-        whitelistMigrationTask = taskBuilder.schedule();
-    }
-
-    private synchronized void finishWhitelistMigration() {
-        whitelistMigrationTask = null;
-        whitelistMigrationActive = false;
-    }
-
     public Logger getLogger(){
         return this.logger;
     }
@@ -224,17 +128,7 @@ public class MineManiaVelocity {
         return this.whitelistManager;
     }
 
-    public static MinecraftProfileService getProfileService() {
-        return profileService;
-    }
-
     public static MineManiaVelocity getInstance(){
         return instance;
-    }
-
-    public enum WhitelistMigrationStartResult {
-        STARTED,
-        ALREADY_RUNNING,
-        NOTHING_TO_MIGRATE
     }
 }

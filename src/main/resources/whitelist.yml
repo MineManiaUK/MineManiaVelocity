@@ -2,3 +2,5 @@ enabled: false
 message:
 
 whitelist:
+cached-names:
+pending-usernames:

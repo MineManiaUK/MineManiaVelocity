@@ -1,25 +1,16 @@
 package com.github.minemaniauk.velocity.minemaniavelocity.commands;
 
-import com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfileService.MinecraftProfile;
-import com.github.minemaniauk.velocity.minemaniavelocity.MinecraftProfileService.MinecraftProfileService;
 import com.github.minemaniauk.velocity.minemaniavelocity.MineManiaVelocity;
-import com.github.minemaniauk.velocity.minemaniavelocity.MineManiaVelocity.WhitelistMigrationStartResult;
+import com.github.minemaniauk.velocity.minemaniavelocity.WhitelistManager.AddResult;
+import com.github.minemaniauk.velocity.minemaniavelocity.WhitelistManager.RemoveResult;
 import com.velocitypowered.api.command.SimpleCommand;
-import com.velocitypowered.api.proxy.ConsoleCommandSource;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 
-import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
-import java.util.UUID;
 
 public class GwhitelistCommand implements SimpleCommand {
-
-    private final MinecraftProfileService profileService;
-
-    public GwhitelistCommand(MinecraftProfileService profileService){
-        this.profileService = profileService;
-    }
 
     @Override
     public void execute(Invocation invocation) {
@@ -30,92 +21,63 @@ public class GwhitelistCommand implements SimpleCommand {
             return;
         }
 
-        switch (args[0]) {
+        switch (args[0].toLowerCase(Locale.ROOT)) {
             case "add":
-                if (args.length != 2) {
+                String addUsername = getUsernameArgument(args);
+                if (addUsername == null) {
                     sendUsage(invocation);
                     return;
                 }
 
-                String addUsername = args[1];
-                try {
-                    MinecraftProfile profile = resolveProfile(invocation, addUsername);
-                    if (profile == null) {
-                        return;
-                    }
-
-                    UUID uuid = profile.getUniqueId();
-                    if (MineManiaVelocity.getInstance().getWhitelistManager().isWhitelisted(uuid)) {
-                        invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&c&l> &f%s &cis already whitelisted".formatted(addUsername)));
-                        return;
-                    }
-
-                    MineManiaVelocity.getInstance().getWhitelistManager().add(uuid, profile.getName());
-                    invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&7&l> &7Successfully &aadded &f%s &7to the whitelist".formatted(profile.getName())));
-                } catch (IOException | InterruptedException e) {
-                    sendProfileServiceError(invocation, e, "Something went wrong resolving the player profile for %s".formatted(addUsername));
-                    return;
+                AddResult addResult = MineManiaVelocity.getInstance().getWhitelistManager().addPlayer(addUsername);
+                switch (addResult) {
+                    case ADDED_PENDING -> invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(
+                            "&7&l> &7Added &f%s &7to the whitelist. Their UUID will be linked when they join.".formatted(addUsername)
+                    ));
+                    case ALREADY_PENDING -> invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(
+                            "&e&l> &f%s &eis already waiting for their first join.".formatted(addUsername)
+                    ));
+                    case ALREADY_WHITELISTED -> invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(
+                            "&c&l> &f%s &cis already whitelisted".formatted(addUsername)
+                    ));
+                    case INVALID_NAME -> sendUsage(invocation);
                 }
-
                 break;
             case "list":
                 List<String> whitelistedPlayers = MineManiaVelocity.getInstance().getWhitelistManager().getAllPlayers();
 
                 if (whitelistedPlayers.isEmpty()) {
-                    invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&7&l> &7There are no whitelisted players."));
+                    invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&7&l> &7There are no whitelist entries."));
                     return;
                 }
 
                 String output = String.join(", ", whitelistedPlayers);
-                invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&7&l> &7Whitelisted players are: &f" + output));
+                invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&7&l> &7Whitelist entries are: &f" + output));
                 break;
             case "remove":
-                if (args.length != 2) {
+                String removeUsername = getUsernameArgument(args);
+                if (removeUsername == null) {
                     sendUsage(invocation);
                     return;
                 }
 
-                String removeUsername = args[1];
-                try {
-                    MinecraftProfile profile = resolveProfile(invocation, removeUsername);
-                    if (profile == null) {
-                        return;
-                    }
-
-                    UUID uuid = profile.getUniqueId();
-                    if (!MineManiaVelocity.getInstance().getWhitelistManager().isWhitelisted(uuid)) {
-                        invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&c&l> &f%s &cis not whitelisted".formatted(removeUsername)));
-                        return;
-                    }
-
-                    MineManiaVelocity.getInstance().getWhitelistManager().remove(uuid);
-                    invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&7&l> &aSuccessfully &cremoved &f%s &7from the whitelist".formatted(profile.getName())));
-                } catch (IOException | InterruptedException e) {
-                    sendProfileServiceError(invocation, e, "Something went wrong resolving the player profile for %s".formatted(removeUsername));
+                RemoveResult removeResult = MineManiaVelocity.getInstance().getWhitelistManager().removePlayer(removeUsername);
+                if (!removeResult.wasRemoved()) {
+                    invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(
+                            "&c&l> &f%s &cis not on the whitelist".formatted(removeUsername)
+                    ));
                     return;
                 }
+
+                invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(
+                        removeResult.wasPending()
+                                ? "&7&l> &aSuccessfully &cremoved &f%s &7from the pending whitelist".formatted(removeResult.getDisplayName())
+                                : "&7&l> &aSuccessfully &cremoved &f%s &7from the whitelist".formatted(removeResult.getDisplayName())
+                ));
                 break;
             case "reload":
                 MineManiaVelocity.getInstance().getWhitelistManager().reloadWhitelist();
                 invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&7&l> &aReloaded &7whitelist"));
-                break;
-            case "migrate":
-                if (args.length != 1) {
-                    sendUsage(invocation);
-                    return;
-                }
-
-                if (!(invocation.source() instanceof ConsoleCommandSource)) {
-                    invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&c&l> &cThe migrate subcommand can only be run from console."));
-                    return;
-                }
-
-                WhitelistMigrationStartResult startResult = MineManiaVelocity.getInstance().startWhitelistMigration();
-                switch (startResult) {
-                    case STARTED -> invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&7&l> &aStarted &7whitelist name migration in the background. It will retry automatically if rate limited."));
-                    case ALREADY_RUNNING -> invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&e&l> &eWhitelist name migration is already running."));
-                    case NOTHING_TO_MIGRATE -> invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&7&l> &7No whitelist names needed migration."));
-                }
                 break;
             default:
                 sendUsage(invocation);
@@ -126,25 +88,25 @@ public class GwhitelistCommand implements SimpleCommand {
     @Override
     public List<String> suggest(Invocation invocation) {
         String[] args = invocation.arguments();
-        List<String> subcommands = getAvailableSubcommands(invocation);
+        List<String> subcommands = getAvailableSubcommands();
 
         if (args.length == 0) {
             return subcommands;
         }
 
         if (args.length == 1) {
-            String prefix = args[0].toLowerCase();
+            String prefix = args[0].toLowerCase(Locale.ROOT);
             return subcommands.stream()
-                    .filter(s -> s.startsWith(prefix))
+                    .filter(subcommand -> subcommand.startsWith(prefix))
                     .toList();
         }
 
-        if (args.length == 2 && args[0].equalsIgnoreCase("remove")) {
-            String prefix = args[1].toLowerCase(Locale.ROOT);
+        if (args.length >= 2 && args[0].equalsIgnoreCase("remove")) {
+            String prefix = getUsernameArgument(args);
+            String lowerCasePrefix = prefix == null ? "" : prefix.toLowerCase(Locale.ROOT);
 
-            List<String> whitelistedPlayers = MineManiaVelocity.getInstance().getWhitelistManager().getWhitelistedPlayerNames();
-            return whitelistedPlayers.stream()
-                    .filter(s -> prefix.isBlank() || s.toLowerCase(Locale.ROOT).startsWith(prefix))
+            return MineManiaVelocity.getInstance().getWhitelistManager().getRemovalSuggestions().stream()
+                    .filter(playerName -> lowerCasePrefix.isBlank() || playerName.toLowerCase(Locale.ROOT).startsWith(lowerCasePrefix))
                     .sorted(String.CASE_INSENSITIVE_ORDER)
                     .toList();
         }
@@ -158,31 +120,19 @@ public class GwhitelistCommand implements SimpleCommand {
     }
 
     private void sendUsage(Invocation invocation) {
-        String usage = invocation.source() instanceof ConsoleCommandSource
-                ? "&c&l> &cUsage: /gwhitelist <add|list|remove|reload|migrate> [username]"
-                : "&c&l> &cUsage: /gwhitelist <add|list|remove|reload> [username]";
-        invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize(usage));
+        invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&c&l> &cUsage: /gwhitelist <add|list|remove|reload> [username]"));
     }
 
-    private MinecraftProfile resolveProfile(Invocation invocation, String username) throws IOException, InterruptedException {
-        MinecraftProfile profile = profileService.findByName(username);
-        if (profile == null) {
-            invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&c&l> &cUnable to find a Mojang profile for &f%s&c.".formatted(username)));
+    private String getUsernameArgument(String[] args) {
+        if (args.length < 2) {
             return null;
         }
-        return profile;
+
+        String username = String.join(" ", Arrays.copyOfRange(args, 1, args.length)).trim();
+        return username.isBlank() ? null : username;
     }
 
-    private void sendProfileServiceError(Invocation invocation, Exception exception, String logMessage) {
-        invocation.source().sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&c&l> &cSomething went wrong. Check console for errors"));
-        MineManiaVelocity.getInstance().getLogger().atError().setCause(exception).log(logMessage);
-    }
-
-    private List<String> getAvailableSubcommands(Invocation invocation) {
-        if (invocation.source() instanceof ConsoleCommandSource) {
-            return List.of("add", "list", "remove", "reload", "migrate");
-        }
-
+    private List<String> getAvailableSubcommands() {
         return List.of("add", "list", "remove", "reload");
     }
 }
