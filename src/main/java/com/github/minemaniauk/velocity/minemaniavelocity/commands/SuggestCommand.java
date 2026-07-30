@@ -10,7 +10,13 @@ public class SuggestCommand implements SimpleCommand {
     public void execute(Invocation invocation) {
         if (invocation.source() instanceof Player p) {
             String message = String.join(" ", invocation.arguments());
-            MineManiaVelocity.getInstance().getWebhookManager().sendReport(p, message);
+
+            if (message.isEmpty()) {
+                p.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&c&l> &cYour suggestion must include content"));
+                return;
+            }
+
+            MineManiaVelocity.getInstance().getWebhookManager().sendSuggest(p, message);
             p.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&7&l> &7Your &2suggestion &7has been sent"));
         }
         else {

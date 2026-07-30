@@ -40,7 +40,8 @@ public class DiscordWebhookManager {
             return;
         }
 
-        message = message.replace("&", "\\&");
+        if (message.isEmpty()) return;
+
         String serverName = sender.getCurrentServer()
                 .map(connection -> connection.getServer().getServerInfo().getName())
                 .orElse("Unknown Server");
@@ -95,7 +96,8 @@ public class DiscordWebhookManager {
             return;
         }
 
-        message = message.replace("&", "\\&");
+        if (message.isEmpty()) return;
+
         String serverName = sender.getCurrentServer()
                 .map(connection -> connection.getServer().getServerInfo().getName())
                 .orElse("Unknown Server");
@@ -129,7 +131,7 @@ public class DiscordWebhookManager {
         String formatedTimeNow = timeNow.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 
         Embed embed = new Embed();
-        embed.setColor(0xE76B74);
+        embed.setColor(0x008000);
         embed.setTitle("Suggestion");
         embed.setDescription(message);
         embed.setFields(new Field[] { new Field("\\u200B", "%s by %s".formatted(serverName, sender.getUsername()), false) });

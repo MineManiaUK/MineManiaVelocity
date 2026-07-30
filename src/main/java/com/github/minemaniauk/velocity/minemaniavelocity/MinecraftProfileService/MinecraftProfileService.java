@@ -75,7 +75,7 @@ public class MinecraftProfileService {
             }
 
             if (statusCode == 429 || statusCode >= 500) {
-                failure = new IOException("Profile lookup failed with HTTP " + statusCode + " for " + url);
+                failure = new RetryableProfileLookupException(statusCode, url);
                 Thread.sleep(250L * (attempt + 1));
                 continue;
             }
@@ -106,5 +106,19 @@ public class MinecraftProfileService {
         );
 
         return new MinecraftProfile(UUID.fromString(dashedUuid), playerName);
+    }
+
+    public static class RetryableProfileLookupException extends IOException {
+
+        private final int statusCode;
+
+        public RetryableProfileLookupException(int statusCode, String url) {
+            super("Profile lookup failed with HTTP " + statusCode + " for " + url);
+            this.statusCode = statusCode;
+        }
+
+        public int getStatusCode() {
+            return statusCode;
+        }
     }
 }

@@ -10,6 +10,12 @@ public class ReportCommand implements SimpleCommand {
     public void execute(Invocation invocation) {
         if (invocation.source() instanceof Player p) {
             String message = String.join(" ", invocation.arguments());
+
+            if (message.isEmpty()) {
+                p.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&c&l> &cYour report must include content"));
+                return;
+            }
+
             MineManiaVelocity.getInstance().getWebhookManager().sendReport(p, message);
             p.sendMessage(LegacyComponentSerializer.legacyAmpersand().deserialize("&7&l> &7Your &creport &7has been sent"));
         }
